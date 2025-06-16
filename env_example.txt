@@ -1,0 +1,12 @@
+# API Configuration
+OPENAI_API_KEY=your_api_key_here
+
+# Optional: Custom Base URL for OpenAI-compatible APIs
+# Examples:
+# Together AI: https://api.together.xyz/v1
+# Replicate: https://api.replicate.com/v1
+# Local server: http://localhost:8000/v1
+# OPENAI_BASE_URL=https://api.together.xyz/v1
+
+# Optional: OpenAI Organization ID
+# OPENAI_ORG_ID=your_org_id_here 
