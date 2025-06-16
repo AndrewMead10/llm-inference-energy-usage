@@ -62,7 +62,8 @@ class SystemMetrics:
     gpu_usage_percent: Optional[float] = None
     gpu_memory_percent: Optional[float] = None
     gpu_temperature: Optional[float] = None
-    power_watts: Optional[float] = None
+    cpu_power_watts: Optional[float] = None
+    gpu_power_watts: Optional[float] = None
 
 
 class PowerMonitor:
@@ -87,68 +88,141 @@ class PowerMonitor:
             print("Warning: nvidia-smi not available. GPU metrics will be disabled.")
             return False
     
-    def _get_power_consumption(self) -> Optional[float]:
-        """Get total system power consumption in watts."""
+    def _get_cpu_power_consumption(self) -> Optional[float]:
+        """Get CPU power consumption in watts using RAPL."""
         try:
-            # Try to read from RAPL (Linux power monitoring)
-            power_paths = [
-                "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
-                "/sys/class/powercap/intel-rapl/intel-rapl:1/energy_uj",
+            # Try to read from RAPL (Linux power monitoring) for CPU packages
+            cpu_power_paths = [
+                "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",  # Package 0
+                "/sys/class/powercap/intel-rapl/intel-rapl:1/energy_uj",  # Package 1 (if exists)
             ]
             
-            total_power = 0
-            for path in power_paths:
-                if os.path.exists(path):
-                    with open(path, 'r') as f:
-                        energy_uj = int(f.read().strip())
-                        # Convert microjoules to watts (approximate)
-                        power_watts = energy_uj / 1000000 / self.interval
-                        total_power += power_watts
+            # Alternative paths for different RAPL implementations
+            alternative_paths = [
+                "/sys/class/powercap/intel-rapl:0/energy_uj",
+                "/sys/class/powercap/intel-rapl:1/energy_uj",
+            ]
             
-            return total_power if total_power > 0 else None
-        except Exception:
+            # Check if we have a previous reading to calculate power
+            if not hasattr(self, '_last_cpu_energy_reading'):
+                # First reading - store energy values for next calculation
+                self._last_cpu_energy_reading = {}
+                self._last_cpu_energy_time = time.time()
+                
+                for i, path in enumerate(cpu_power_paths + alternative_paths):
+                    if os.path.exists(path):
+                        try:
+                            with open(path, 'r') as f:
+                                energy_uj = int(f.read().strip())
+                                self._last_cpu_energy_reading[path] = energy_uj
+                        except (IOError, ValueError):
+                            continue
+                return None  # Can't calculate power on first reading
+            
+            # Calculate power based on energy difference
+            current_time = time.time()
+            time_diff = current_time - self._last_cpu_energy_time
+            total_power = 0
+            readings_found = 0
+            
+            for path in cpu_power_paths + alternative_paths:
+                if os.path.exists(path) and path in self._last_cpu_energy_reading:
+                    try:
+                        with open(path, 'r') as f:
+                            current_energy_uj = int(f.read().strip())
+                            previous_energy_uj = self._last_cpu_energy_reading[path]
+                            
+                            # Calculate power: (energy_diff / time_diff)
+                            energy_diff_j = (current_energy_uj - previous_energy_uj) / 1000000  # Convert to Joules
+                            if time_diff > 0:
+                                power_watts = energy_diff_j / time_diff
+                                total_power += power_watts
+                                readings_found += 1
+                            
+                            # Update for next reading
+                            self._last_cpu_energy_reading[path] = current_energy_uj
+                    except (IOError, ValueError):
+                        continue
+            
+            self._last_cpu_energy_time = current_time
+            return total_power if readings_found > 0 else None
+            
+        except Exception as e:
+            print(f"Warning: Could not get CPU power consumption: {e}")
             return None
     
-    def _get_gpu_metrics(self) -> tuple:
-        """Get GPU usage, memory, and temperature metrics using nvidia-smi."""
+    def _get_gpu_power_consumption(self) -> Optional[float]:
+        """Get GPU power consumption in watts using nvidia-smi."""
         if not self.gpu_available:
-            return None, None, None
+            return None
         
         try:
-            # Query GPU utilization, memory usage, and temperature
+            # Query GPU power consumption
             cmd = [
                 'nvidia-smi', 
-                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu',
+                '--query-gpu=power.draw',
                 '--format=csv,noheader,nounits'
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             
             if result.returncode != 0:
-                return None, None, None
+                return None
             
-            # Parse the output - format: "utilization, memory_used, memory_total, temperature"
+            # Parse the output - format: "power_draw"
+            line = result.stdout.strip().split('\n')[0]  # Get first GPU
+            power_str = line.strip()
+            
+            if power_str and power_str != 'N/A':
+                return float(power_str)
+            
+            return None
+            
+        except (subprocess.TimeoutExpired, ValueError, IndexError, Exception) as e:
+            print(f"Warning: Could not get GPU power consumption: {e}")
+            return None
+    
+    def _get_gpu_metrics(self) -> tuple:
+        """Get GPU usage, memory, temperature, and power metrics using nvidia-smi."""
+        if not self.gpu_available:
+            return None, None, None, None
+        
+        try:
+            # Query GPU utilization, memory usage, temperature, and power
+            cmd = [
+                'nvidia-smi', 
+                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw',
+                '--format=csv,noheader,nounits'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            if result.returncode != 0:
+                return None, None, None, None
+            
+            # Parse the output - format: "utilization, memory_used, memory_total, temperature, power_draw"
             line = result.stdout.strip().split('\n')[0]  # Get first GPU
             values = [v.strip() for v in line.split(',')]
             
-            if len(values) >= 4:
+            if len(values) >= 5:
                 gpu_usage = float(values[0]) if values[0] != 'N/A' else None
                 memory_used = float(values[1]) if values[1] != 'N/A' else None
                 memory_total = float(values[2]) if values[2] != 'N/A' else None
                 gpu_temp = float(values[3]) if values[3] != 'N/A' else None
+                gpu_power = float(values[4]) if values[4] != 'N/A' else None
                 
                 # Calculate memory percentage
                 gpu_memory_percent = None
                 if memory_used is not None and memory_total is not None and memory_total > 0:
                     gpu_memory_percent = (memory_used / memory_total) * 100
                 
-                return gpu_usage, gpu_memory_percent, gpu_temp
+                return gpu_usage, gpu_memory_percent, gpu_temp, gpu_power
             
-            return None, None, None
+            return None, None, None, None
             
         except (subprocess.TimeoutExpired, ValueError, IndexError, Exception) as e:
             print(f"Warning: Could not get GPU metrics: {e}")
-            return None, None, None
+            return None, None, None, None
     
     def _monitor_loop(self):
         """Main monitoring loop that runs in a separate thread."""
@@ -162,10 +236,11 @@ class PowerMonitor:
             memory_used_gb = memory.used / (1024**3)
             
             # GPU metrics
-            gpu_usage, gpu_memory_percent, gpu_temp = self._get_gpu_metrics()
+            gpu_usage, gpu_memory_percent, gpu_temp, gpu_power = self._get_gpu_metrics()
             
             # Power consumption
-            power_watts = self._get_power_consumption()
+            cpu_power_watts = self._get_cpu_power_consumption()
+            gpu_power_watts = gpu_power
             
             # Store metrics
             metrics = SystemMetrics(
@@ -176,7 +251,8 @@ class PowerMonitor:
                 gpu_usage_percent=gpu_usage,
                 gpu_memory_percent=gpu_memory_percent,
                 gpu_temperature=gpu_temp,
-                power_watts=power_watts
+                cpu_power_watts=cpu_power_watts,
+                gpu_power_watts=gpu_power_watts
             )
             self.metrics.append(metrics)
             

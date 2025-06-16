@@ -32,22 +32,16 @@ pip install -r requirements.txt
 # Create outputs directory
 mkdir -p outputs
 
-# Set up environment file
-if [ ! -f .env ]; then
-    cp env_example.txt .env
-    echo "Created .env file. Please edit it to add your OpenAI API key."
-fi
-
 # Make the main script executable
 chmod +x llm_inference_benchmark.py
 
 echo "Setup complete!"
 echo ""
 echo "Next steps:"
-echo "1. Edit the .env file and add your OpenAI API key"
+echo "1. Make sure your local LLM server is running (e.g., on http://localhost:8000)"
 echo "2. If you installed NVIDIA drivers, reboot the system"
 echo "3. Activate the virtual environment: source venv/bin/activate"
-echo "4. Run the benchmark: python llm_inference_benchmark.py --prompts-file example_prompts.txt"
+echo "4. Run the benchmark: ./run_benchmark.sh"
 echo ""
 echo "For power monitoring to work properly on Ubuntu server:"
 echo "1. Ensure you have root access or the user is in the appropriate groups"

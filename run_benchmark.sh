@@ -14,7 +14,7 @@ fi
 # Default parameters
 PROMPTS_FILE="example_prompts.txt"
 MODEL="Qwen/Qwen3-8B"
-BASE_URL=""
+BASE_URL="http://localhost:8000/v1"
 RATE_LIMIT=5.0
 MAX_CONCURRENT=10
 NUM_RUNS=1
@@ -78,34 +78,22 @@ if [ ! -f "$PROMPTS_FILE" ]; then
     exit 1
 fi
 
-# Check if .env file exists
-if [ ! -f ".env" ]; then
-    echo "Error: .env file not found. Please copy env_example.txt to .env and add your OpenAI API key"
-    exit 1
-fi
-
 echo "Running benchmark with the following configuration:"
 echo "  Prompts file: $PROMPTS_FILE"
 echo "  Model: $MODEL"
-if [ -n "$BASE_URL" ]; then
-    echo "  Base URL: $BASE_URL"
-fi
+echo "  Base URL: $BASE_URL"
 echo "  Rate limit: $RATE_LIMIT requests/second"
 echo "  Max concurrent: $MAX_CONCURRENT"
 echo "  Number of runs: $NUM_RUNS"
 echo "  Output directory: $OUTPUT_DIR"
 echo ""
 
-# Run the benchmark
-BASE_URL_ARG=""
-if [ -n "$BASE_URL" ]; then
-    BASE_URL_ARG="--base-url $BASE_URL"
-fi
-
+# Run the benchmark with dummy API key for local server
 python llm_inference_benchmark.py \
     --prompts-file "$PROMPTS_FILE" \
     --model "$MODEL" \
-    $BASE_URL_ARG \
+    --base-url "$BASE_URL" \
+    --api-key "dummy-key" \
     --rate-limit "$RATE_LIMIT" \
     --max-concurrent "$MAX_CONCURRENT" \
     --num-runs "$NUM_RUNS" \
