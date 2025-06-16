@@ -33,13 +33,9 @@ from tqdm.asyncio import tqdm
 import aiofiles
 
 # GPU monitoring imports
-try:
-    import GPUtil
-    import pynvml
-    GPU_AVAILABLE = True
-except ImportError:
-    GPU_AVAILABLE = False
-    print("Warning: GPU monitoring libraries not available. GPU metrics will be disabled.")
+import subprocess
+import re
+GPU_AVAILABLE = True  # nvidia-smi should be available if NVIDIA GPU is present
 
 
 @dataclass
@@ -78,19 +74,18 @@ class PowerMonitor:
         self.metrics = []
         self.monitor_thread = None
         
-        # Initialize GPU monitoring if available
-        if GPU_AVAILABLE:
-            try:
-                pynvml.nvmlInit()
-                self.gpu_count = pynvml.nvmlDeviceGetCount()
-                self.gpu_handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(self.gpu_count)]
-            except Exception as e:
-                print(f"Warning: Could not initialize GPU monitoring: {e}")
-                self.gpu_count = 0
-                self.gpu_handles = []
-        else:
-            self.gpu_count = 0
-            self.gpu_handles = []
+        # Test nvidia-smi availability
+        self.gpu_available = self._test_nvidia_smi()
+    
+    def _test_nvidia_smi(self) -> bool:
+        """Test if nvidia-smi is available and working."""
+        try:
+            result = subprocess.run(['nvidia-smi', '--query-gpu=index', '--format=csv,noheader,nounits'], 
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            print("Warning: nvidia-smi not available. GPU metrics will be disabled.")
+            return False
     
     def _get_power_consumption(self) -> Optional[float]:
         """Get total system power consumption in watts."""
@@ -115,27 +110,43 @@ class PowerMonitor:
             return None
     
     def _get_gpu_metrics(self) -> tuple:
-        """Get GPU usage, memory, and temperature metrics."""
-        if not self.gpu_handles:
+        """Get GPU usage, memory, and temperature metrics using nvidia-smi."""
+        if not self.gpu_available:
             return None, None, None
         
         try:
-            # Get metrics from the first GPU
-            handle = self.gpu_handles[0]
+            # Query GPU utilization, memory usage, and temperature
+            cmd = [
+                'nvidia-smi', 
+                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu',
+                '--format=csv,noheader,nounits'
+            ]
             
-            # GPU utilization
-            utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            gpu_usage = utilization.gpu
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             
-            # GPU memory
-            memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            gpu_memory_percent = (memory_info.used / memory_info.total) * 100
+            if result.returncode != 0:
+                return None, None, None
             
-            # GPU temperature
-            gpu_temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            # Parse the output - format: "utilization, memory_used, memory_total, temperature"
+            line = result.stdout.strip().split('\n')[0]  # Get first GPU
+            values = [v.strip() for v in line.split(',')]
             
-            return gpu_usage, gpu_memory_percent, gpu_temp
-        except Exception as e:
+            if len(values) >= 4:
+                gpu_usage = float(values[0]) if values[0] != 'N/A' else None
+                memory_used = float(values[1]) if values[1] != 'N/A' else None
+                memory_total = float(values[2]) if values[2] != 'N/A' else None
+                gpu_temp = float(values[3]) if values[3] != 'N/A' else None
+                
+                # Calculate memory percentage
+                gpu_memory_percent = None
+                if memory_used is not None and memory_total is not None and memory_total > 0:
+                    gpu_memory_percent = (memory_used / memory_total) * 100
+                
+                return gpu_usage, gpu_memory_percent, gpu_temp
+            
+            return None, None, None
+            
+        except (subprocess.TimeoutExpired, ValueError, IndexError, Exception) as e:
             print(f"Warning: Could not get GPU metrics: {e}")
             return None, None, None
     
