@@ -336,6 +336,21 @@ class LLMInferenceBenchmark:
             self.logger.error(f"Error loading prompts: {e}")
             raise
     
+    def expand_prompts(self, prompts: List[str], target_count: int) -> List[str]:
+        """Expand prompts list to reach target count by duplicating as needed."""
+        if not prompts:
+            raise ValueError("No prompts provided")
+        
+        if target_count <= len(prompts):
+            return prompts[:target_count]
+        
+        # Calculate how many times we need to repeat the prompts
+        repetitions = (target_count + len(prompts) - 1) // len(prompts)  # Ceiling division
+        expanded_prompts = (prompts * repetitions)[:target_count]
+        
+        self.logger.info(f"Expanded {len(prompts)} prompts to {len(expanded_prompts)} examples")
+        return expanded_prompts
+    
     async def _make_request(self, prompt: str, prompt_id: int, run_id: int) -> RequestMetrics:
         """Make a single request to the LLM API."""
         async with self.semaphore:
@@ -386,11 +401,14 @@ class LLMInferenceBenchmark:
     
     async def run_benchmark(self, 
                           prompts: List[str], 
-                          num_runs: int = 1,
+                          num_examples: int = 50,
                           save_outputs: bool = True) -> Dict[str, Any]:
         """Run the benchmark with the given prompts."""
         
-        self.logger.info(f"Starting benchmark with {len(prompts)} prompts, {num_runs} runs")
+        # Expand prompts to reach target number of examples
+        expanded_prompts = self.expand_prompts(prompts, num_examples)
+        
+        self.logger.info(f"Starting benchmark with {len(expanded_prompts)} examples")
         
         # Start power monitoring
         self.power_monitor.start_monitoring()
@@ -398,21 +416,17 @@ class LLMInferenceBenchmark:
         total_start_time = time.time()
         
         try:
-            # Run multiple iterations
-            for run_id in range(num_runs):
-                self.logger.info(f"Starting run {run_id + 1}/{num_runs}")
-                
-                # Create tasks for all prompts
-                tasks = [
-                    self._make_request(prompt, prompt_id, run_id)
-                    for prompt_id, prompt in enumerate(prompts)
-                ]
-                
-                # Execute all tasks with progress bar
-                results = await tqdm.gather(*tasks, desc=f"Run {run_id + 1}")
-                self.request_metrics.extend(results)
-                
-                self.logger.info(f"Completed run {run_id + 1}/{num_runs}")
+            # Create tasks for all prompts (single run with expanded prompts)
+            tasks = [
+                self._make_request(prompt, prompt_id, 0)  # run_id is always 0 now
+                for prompt_id, prompt in enumerate(expanded_prompts)
+            ]
+            
+            # Execute all tasks with progress bar
+            results = await tqdm.gather(*tasks, desc="Running benchmark")
+            self.request_metrics.extend(results)
+            
+            self.logger.info(f"Completed benchmark with {len(expanded_prompts)} examples")
         
         finally:
             total_end_time = time.time()
@@ -504,7 +518,7 @@ async def main():
     parser.add_argument("--base-url", help="Base URL for OpenAI-compatible API (or set OPENAI_BASE_URL env var)")
     parser.add_argument("--rate-limit", type=float, default=5.0, help="Max requests per second")
     parser.add_argument("--max-concurrent", type=int, default=10, help="Max concurrent requests")
-    parser.add_argument("--num-runs", type=int, default=1, help="Number of times to run the full prompt set")
+    parser.add_argument("--num-examples", type=int, default=50, help="Number of examples to run (will duplicate prompts if needed)")
     parser.add_argument("--output-dir", default="outputs", help="Output directory for results")
     
     args = parser.parse_args()
@@ -544,7 +558,7 @@ async def main():
     try:
         summary = await benchmark.run_benchmark(
             prompts=prompts,
-            num_runs=args.num_runs,
+            num_examples=args.num_examples,
             save_outputs=True
         )
         
