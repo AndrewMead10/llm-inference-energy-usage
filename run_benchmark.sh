@@ -45,7 +45,7 @@ get_latest_summary() {
 
 # Default parameters
 PROMPTS_FILE="example_prompts.txt"
-MODEL="Qwen/Qwen3-8B"
+MODEL="Qwen/Qwen3-8B-AWQ"
 BASE_URL="http://localhost:8000/v1"
 RATE_LIMIT=5.0
 MAX_CONCURRENT=10
