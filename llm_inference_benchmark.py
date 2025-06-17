@@ -64,6 +64,9 @@ class SystemMetrics:
     gpu_temperature: Optional[float] = None
     cpu_power_watts: Optional[float] = None
     gpu_power_watts: Optional[float] = None
+    total_system_power_watts: Optional[float] = None
+    dram_power_watts: Optional[float] = None
+    package_power_watts: Optional[float] = None
 
 
 class PowerMonitor:
@@ -224,6 +227,177 @@ class PowerMonitor:
             print(f"Warning: Could not get GPU metrics: {e}")
             return None, None, None, None
     
+    def _get_total_system_power_ipmi(self) -> Optional[float]:
+        """Get total system power consumption using IPMI."""
+        try:
+            # Try to get system power via IPMI
+            cmd = ['ipmitool', 'sdr', 'type', 'Current']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                # Try alternative IPMI command
+                cmd = ['ipmitool', 'sensor', 'get', 'System Power']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode != 0:
+                    return None
+            
+            # Parse IPMI output for power readings
+            for line in result.stdout.split('\n'):
+                line = line.strip().lower()
+                if any(keyword in line for keyword in ['system power', 'total power', 'power consumption']):
+                    # Extract numeric value (watts)
+                    import re
+                    match = re.search(r'(\d+(?:\.\d+)?)\s*watts?', line)
+                    if match:
+                        return float(match.group(1))
+                    
+                    # Alternative format: look for numeric values
+                    match = re.search(r'(\d+(?:\.\d+)?)', line)
+                    if match:
+                        return float(match.group(1))
+            
+            return None
+            
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            # Don't print warning on first attempt - IPMI might not be available
+            return None
+    
+    def _get_hwmon_power(self) -> Optional[float]:
+        """Get system power from hwmon sensors."""
+        try:
+            hwmon_paths = []
+            
+            # Find hwmon power sensors
+            import glob
+            for hwmon_dir in glob.glob('/sys/class/hwmon/hwmon*/'):
+                power_files = glob.glob(f"{hwmon_dir}power*_input")
+                for power_file in power_files:
+                    hwmon_paths.append(power_file)
+            
+            total_power = 0
+            readings_found = 0
+            
+            for power_file in hwmon_paths:
+                try:
+                    with open(power_file, 'r') as f:
+                        # hwmon power is typically in microwatts
+                        power_uw = int(f.read().strip())
+                        power_w = power_uw / 1000000
+                        
+                        # Only count significant power readings (> 1W to filter out noise)
+                        if power_w > 1.0:
+                            total_power += power_w
+                            readings_found += 1
+                except (IOError, ValueError):
+                    continue
+            
+            return total_power if readings_found > 0 else None
+            
+        except Exception:
+            return None
+    
+    def _get_extended_rapl_power(self) -> tuple:
+        """Get extended RAPL measurements including DRAM and package power."""
+        try:
+            # RAPL paths for different power domains
+            rapl_domains = {
+                'package': [
+                    "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+                    "/sys/class/powercap/intel-rapl/intel-rapl:1/energy_uj",
+                ],
+                'dram': [
+                    "/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0/energy_uj",
+                    "/sys/class/powercap/intel-rapl/intel-rapl:1/intel-rapl:1:0/energy_uj",
+                ],
+                'uncore': [
+                    "/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1/energy_uj",
+                    "/sys/class/powercap/intel-rapl/intel-rapl:1/intel-rapl:1:1/energy_uj",
+                ]
+            }
+            
+            # Alternative RAPL paths
+            alt_rapl_domains = {
+                'package': [
+                    "/sys/class/powercap/intel-rapl:0/energy_uj",
+                    "/sys/class/powercap/intel-rapl:1/energy_uj",
+                ],
+                'dram': [
+                    "/sys/class/powercap/intel-rapl:0/intel-rapl:0:0/energy_uj",
+                    "/sys/class/powercap/intel-rapl:1/intel-rapl:1:0/energy_uj",
+                ]
+            }
+            
+            # Combine both path sets
+            for domain in alt_rapl_domains:
+                if domain not in rapl_domains:
+                    rapl_domains[domain] = []
+                rapl_domains[domain].extend(alt_rapl_domains[domain])
+            
+            # Initialize energy tracking if needed
+            if not hasattr(self, '_last_extended_rapl_reading'):
+                self._last_extended_rapl_reading = {}
+                self._last_extended_rapl_time = time.time()
+                
+                for domain, paths in rapl_domains.items():
+                    self._last_extended_rapl_reading[domain] = {}
+                    for path in paths:
+                        if os.path.exists(path):
+                            try:
+                                with open(path, 'r') as f:
+                                    energy_uj = int(f.read().strip())
+                                    self._last_extended_rapl_reading[domain][path] = energy_uj
+                            except (IOError, ValueError):
+                                continue
+                
+                return None, None  # Can't calculate on first reading
+            
+            # Calculate power for each domain
+            current_time = time.time()
+            time_diff = current_time - self._last_extended_rapl_time
+            
+            domain_powers = {}
+            
+            for domain, paths in rapl_domains.items():
+                domain_power = 0
+                readings_found = 0
+                
+                for path in paths:
+                    if (os.path.exists(path) and 
+                        domain in self._last_extended_rapl_reading and 
+                        path in self._last_extended_rapl_reading[domain]):
+                        
+                        try:
+                            with open(path, 'r') as f:
+                                current_energy_uj = int(f.read().strip())
+                                previous_energy_uj = self._last_extended_rapl_reading[domain][path]
+                                
+                                # Calculate power
+                                energy_diff_j = (current_energy_uj - previous_energy_uj) / 1000000
+                                if time_diff > 0:
+                                    power_watts = energy_diff_j / time_diff
+                                    domain_power += power_watts
+                                    readings_found += 1
+                                
+                                # Update for next reading
+                                self._last_extended_rapl_reading[domain][path] = current_energy_uj
+                        except (IOError, ValueError):
+                            continue
+                
+                domain_powers[domain] = domain_power if readings_found > 0 else None
+            
+            self._last_extended_rapl_time = current_time
+            
+            # Return package power and DRAM power
+            package_power = domain_powers.get('package')
+            dram_power = domain_powers.get('dram')
+            
+            return package_power, dram_power
+            
+        except Exception as e:
+            print(f"Warning: Could not get extended RAPL power: {e}")
+            return None, None
+    
     def _monitor_loop(self):
         """Main monitoring loop that runs in a separate thread."""
         while self.monitoring:
@@ -242,6 +416,19 @@ class PowerMonitor:
             cpu_power_watts = self._get_cpu_power_consumption()
             gpu_power_watts = gpu_power
             
+            # Total system power measurements
+            total_system_power = None
+            
+            # Try IPMI first (most accurate for total system power)
+            total_system_power = self._get_total_system_power_ipmi()
+            
+            # If IPMI fails, try hwmon sensors
+            if total_system_power is None:
+                total_system_power = self._get_hwmon_power()
+            
+            # Extended RAPL measurements
+            package_power, dram_power = self._get_extended_rapl_power()
+            
             # Store metrics
             metrics = SystemMetrics(
                 timestamp=timestamp,
@@ -252,7 +439,10 @@ class PowerMonitor:
                 gpu_memory_percent=gpu_memory_percent,
                 gpu_temperature=gpu_temp,
                 cpu_power_watts=cpu_power_watts,
-                gpu_power_watts=gpu_power_watts
+                gpu_power_watts=gpu_power_watts,
+                total_system_power_watts=total_system_power,
+                dram_power_watts=dram_power,
+                package_power_watts=package_power
             )
             self.metrics.append(metrics)
             
@@ -291,7 +481,8 @@ class LLMInferenceBenchmark:
                  max_requests_per_second: float = 5.0,
                  max_concurrent_requests: int = 10,
                  output_dir: str = "outputs",
-                 base_url: Optional[str] = None):
+                 base_url: Optional[str] = None,
+                 suppress_reasoning: bool = False):
         # Initialize OpenAI client with custom base URL if provided
         if base_url:
             self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
@@ -302,6 +493,7 @@ class LLMInferenceBenchmark:
         self.semaphore = asyncio.Semaphore(max_concurrent_requests)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+        self.suppress_reasoning = suppress_reasoning
         
         # Initialize power monitor
         self.power_monitor = PowerMonitor()
@@ -357,10 +549,16 @@ class LLMInferenceBenchmark:
             async with self.throttler:
                 request_start_time = time.time()
                 
+                # Add \nothink token if reasoning suppression is enabled
+                if self.suppress_reasoning:
+                    prompt_to_send = prompt + "\\nothink"
+                else:
+                    prompt_to_send = prompt
+                
                 try:
                     response = await self.client.chat.completions.create(
                         model=self.model,
-                        messages=[{"role": "user", "content": prompt}],
+                        messages=[{"role": "user", "content": prompt_to_send}],
                         max_tokens=1000,
                         temperature=0.7
                     )
@@ -520,6 +718,7 @@ async def main():
     parser.add_argument("--max-concurrent", type=int, default=10, help="Max concurrent requests")
     parser.add_argument("--num-examples", type=int, default=50, help="Number of examples to run (will duplicate prompts if needed)")
     parser.add_argument("--output-dir", default="outputs", help="Output directory for results")
+    parser.add_argument("--suppress-reasoning", action="store_true", help="Add \\nothink token to suppress reasoning mode (for Qwen models)")
     
     args = parser.parse_args()
     
@@ -544,7 +743,8 @@ async def main():
         max_requests_per_second=args.rate_limit,
         max_concurrent_requests=args.max_concurrent,
         output_dir=args.output_dir,
-        base_url=base_url
+        base_url=base_url,
+        suppress_reasoning=args.suppress_reasoning
     )
     
     # Load prompts

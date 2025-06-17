@@ -226,14 +226,17 @@ if [ "$SEARCH_MODE" = true ]; then
     echo "==========================================="
     echo "Searching for optimal batch size using powers of 2 from 2 to 1024"
     echo "Metric: total_tokens / total_time (tokens per second)"
-    echo "Early stopping: 2 consecutive results worse than current best"
+    echo "Early stopping: 1 consecutive result worse than current best"
     echo ""
     echo "Configuration:"
     echo "  Prompts file: $PROMPTS_FILE"
     echo "  Model: $MODEL"
     echo "  Base URL: $BASE_URL"
-    echo "  Rate limit: $RATE_LIMIT requests/second"
-    echo "  Max concurrent: $MAX_CONCURRENT"
+    # only show rate limit and max concurrent if not in search mode
+    if [ "$SEARCH_MODE" = false ]; then
+        echo "  Rate limit: $RATE_LIMIT requests/second"
+        echo "  Max concurrent: $MAX_CONCURRENT"
+    fi
     echo "  Output directory: $OUTPUT_DIR"
     echo ""
 
@@ -258,6 +261,7 @@ if [ "$SEARCH_MODE" = true ]; then
         mkdir -p "$batch_output_dir"
         
         # Run benchmark for this batch size (use batch_size for rate limit and max concurrent)
+        # Use --suppress-reasoning to optimize search by disabling Qwen's reasoning mode
         python llm_inference_benchmark.py \
             --prompts-file "$PROMPTS_FILE" \
             --model "$MODEL" \
@@ -266,7 +270,8 @@ if [ "$SEARCH_MODE" = true ]; then
             --rate-limit "$batch_size" \
             --max-concurrent "$batch_size" \
             --num-examples "$batch_size" \
-            --output-dir "$batch_output_dir" > /dev/null 2>&1
+            --output-dir "$batch_output_dir" \
+            --suppress-reasoning > /dev/null 2>&1
         
         # Get the latest summary file
         latest_summary=$(get_latest_summary "$batch_output_dir")
@@ -316,9 +321,9 @@ except:
                 echo " worse ($consecutive_worse)"
                 
                 # Check early stopping condition
-                if [ $consecutive_worse -ge 2 ]; then
+                if [ $consecutive_worse -ge 1 ]; then
                     echo ""
-                    echo "Early stopping: 2 consecutive results worse than best"
+                    echo "Early stopping: 1 consecutive result worse than best"
                     break
                 fi
             fi
@@ -326,9 +331,9 @@ except:
             echo " ERROR: No results found"
             consecutive_worse=$((consecutive_worse + 1))
             
-            if [ $consecutive_worse -ge 2 ]; then
+            if [ $consecutive_worse -ge 1 ]; then
                 echo ""
-                echo "Early stopping: 2 consecutive failures"
+                echo "Early stopping: 1 consecutive failure"
                 break
             fi
         fi
@@ -366,6 +371,10 @@ except:
     echo "" >> "$summary_file"
     echo "To reproduce the best result, run:" >> "$summary_file"
     echo "$0 --num-examples $best_batch_size --gpu-model $GPU_MODEL [other options]" >> "$summary_file"
+    echo "" >> "$summary_file"
+    echo "REASONING MODE:" >> "$summary_file"
+    echo "Search was performed with \\nothink token to suppress reasoning for efficiency." >> "$summary_file"
+    echo "Final reasoning-enabled benchmark was run with best batch size and saved to reasoning_run/" >> "$summary_file"
     
     # Copy best run to best_run folder
     if [ -n "$best_batch_dir" ] && [ -d "$best_batch_dir" ]; then
@@ -374,6 +383,24 @@ except:
         cp -r "$best_batch_dir" "$best_run_dir"
         echo "Best run copied successfully."
     fi
+    
+    # Run final benchmark with best batch size and reasoning enabled
+    echo ""
+    echo "Running final benchmark with reasoning enabled using best batch size: $best_batch_size"
+    reasoning_output_dir="$OUTPUT_DIR/reasoning_run"
+    mkdir -p "$reasoning_output_dir"
+    
+    python llm_inference_benchmark.py \
+        --prompts-file "$PROMPTS_FILE" \
+        --model "$MODEL" \
+        --base-url "$BASE_URL" \
+        --api-key "dummy-key" \
+        --rate-limit "$best_batch_size" \
+        --max-concurrent "$best_batch_size" \
+        --num-examples "$best_batch_size" \
+        --output-dir "$reasoning_output_dir"
+    
+    echo "Reasoning-enabled benchmark completed and saved to: $reasoning_output_dir"
     
     echo "Summary saved to: $summary_file"
     echo ""

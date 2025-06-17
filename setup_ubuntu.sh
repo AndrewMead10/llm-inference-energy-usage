@@ -19,6 +19,15 @@ sudo apt install -y htop iotop powertop
 # Install tools for power monitoring (RAPL interface)
 sudo apt install -y linux-tools-common linux-tools-generic
 
+# Install IPMI tools for total system power monitoring
+sudo apt install -y ipmitool
+
+# Install lm-sensors for hwmon-based power monitoring
+sudo apt install -y lm-sensors
+
+# Detect sensors (this might need user interaction, so run in non-interactive mode)
+sudo sensors-detect --auto
+
 # Create Python virtual environment
 python3 -m venv venv
 source venv/bin/activate
@@ -35,13 +44,17 @@ mkdir -p outputs
 # Make the main script executable
 chmod +x llm_inference_benchmark.py
 
+# Make the power monitoring test script executable
+chmod +x test_power_monitoring.py
+
 echo "Setup complete!"
 echo ""
 echo "Next steps:"
-echo "1. Make sure your local LLM server is running (e.g., on http://localhost:8000)"
-echo "2. If you installed NVIDIA drivers, reboot the system"
-echo "3. Activate the virtual environment: source venv/bin/activate"
-echo "4. Run the benchmark: ./run_benchmark.sh"
+echo "1. Test power monitoring capabilities: ./test_power_monitoring.py"
+echo "2. Make sure your local LLM server is running (e.g., on http://localhost:8000)"
+echo "3. If you installed NVIDIA drivers, reboot the system"
+echo "4. Activate the virtual environment: source venv/bin/activate"
+echo "5. Run the benchmark: ./run_benchmark.sh"
 echo ""
 echo "For power monitoring to work properly on Ubuntu server:"
 echo "1. Ensure you have root access or the user is in the appropriate groups"
