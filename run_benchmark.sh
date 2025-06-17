@@ -240,8 +240,12 @@ else
     echo "  Prompts file: $PROMPTS_FILE"
     echo "  Model: $MODEL"
     echo "  Base URL: $BASE_URL"
-    echo "  Rate limit: $RATE_LIMIT requests/second"
-    echo "  Max concurrent: $MAX_CONCURRENT"
+    
+    # if not search mode, then print the rate limit and max concurrent
+    if [ "$SEARCH_MODE" = false ]; then
+        echo "  Rate limit: $RATE_LIMIT requests/second"
+        echo "  Max concurrent: $MAX_CONCURRENT"
+    fi
     echo "  Number of examples: $NUM_EXAMPLES"
     echo "  Output directory: $OUTPUT_DIR"
     echo ""
