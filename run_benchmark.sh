@@ -50,7 +50,7 @@ BASE_URL="http://localhost:8000/v1"
 RATE_LIMIT=5.0
 MAX_CONCURRENT=10
 OUTPUT_DIR="outputs"
-SEARCH_MODE=false
+SEARCH_MODE=true
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
