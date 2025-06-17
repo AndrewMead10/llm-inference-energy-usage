@@ -1,0 +1,1 @@
+--model Qwen/Qwen3-8B --max-model-len 32768 --gpu-memory-utilization 0.95 --host 0.0.0.0 --port 8000 --quantization fp8

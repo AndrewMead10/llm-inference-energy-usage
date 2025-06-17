@@ -25,8 +25,9 @@ sudo apt install -y ipmitool
 # Install lm-sensors for hwmon-based power monitoring
 sudo apt install -y lm-sensors
 
+# BELOW DOES NOT WORK ON RUNPOD
 # Detect sensors (this might need user interaction, so run in non-interactive mode)
-sudo sensors-detect --auto
+#sudo sensors-detect --auto
 
 # Create Python virtual environment
 python3 -m venv venv
