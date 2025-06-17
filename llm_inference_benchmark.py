@@ -647,7 +647,8 @@ class LLMInferenceBenchmark:
                 "failed_requests": len(failed_requests),
                 "avg_response_time": avg_response_time,
                 "total_tokens": total_tokens,
-                "requests_per_second": len(self.request_metrics) / total_time if total_time > 0 else 0
+                "requests_per_second": len(self.request_metrics) / total_time if total_time > 0 else 0,
+                "tokens_per_second": total_tokens / total_time if total_time > 0 and total_tokens > 0 else 0
             }
             
             self.logger.info(f"Benchmark completed: {summary}")
@@ -772,6 +773,7 @@ async def main():
         print(f"Average response time: {summary['avg_response_time']:.2f} seconds")
         print(f"Total tokens: {summary['total_tokens']}")
         print(f"Requests per second: {summary['requests_per_second']:.2f}")
+        print(f"Tokens per second: {summary['tokens_per_second']:.2f}")
         print("="*50)
         
     except Exception as e:

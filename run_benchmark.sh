@@ -442,6 +442,13 @@ else
         --num-examples "$NUM_EXAMPLES" \
         --output-dir "$OUTPUT_DIR"
 
+    # Extract and display tokens per second from the latest run
+    latest_summary=$(get_latest_summary "$OUTPUT_DIR")
+    if [ -n "$latest_summary" ]; then
+        tokens_per_second=$(extract_metric "$latest_summary")
+        echo "Tokens per second: $tokens_per_second"
+    fi
+    
     echo ""
     echo "Benchmark completed! Check the $OUTPUT_DIR directory for results."
 fi 
