@@ -148,14 +148,14 @@ if [ "$SEARCH_MODE" = true ]; then
     for batch_size in "${batch_sizes[@]}"; do
         echo -n "    $batch_size     |"
         
-        # Run benchmark for this batch size
+        # Run benchmark for this batch size (use batch_size for rate limit and max concurrent)
         python llm_inference_benchmark.py \
             --prompts-file "$PROMPTS_FILE" \
             --model "$MODEL" \
             --base-url "$BASE_URL" \
             --api-key "dummy-key" \
-            --rate-limit "$RATE_LIMIT" \
-            --max-concurrent "$MAX_CONCURRENT" \
+            --rate-limit "$batch_size" \
+            --max-concurrent "$batch_size" \
             --num-examples "$batch_size" \
             --output-dir "$OUTPUT_DIR" > /dev/null 2>&1
         
